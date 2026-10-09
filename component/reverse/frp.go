@@ -5,14 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
+	"github.com/metacubex/mihomo/adapter/inbound"
 	"github.com/metacubex/mihomo/adapter/outbound"
+	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/structure"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/transport/socks5"
 
 	frpclient "github.com/fatedier/frp/client"
+	frpproxy "github.com/fatedier/frp/client/proxy"
 	frpconfig "github.com/fatedier/frp/pkg/config"
 	"github.com/fatedier/frp/pkg/config/source"
 	v1 "github.com/fatedier/frp/pkg/config/v1"
@@ -77,7 +83,23 @@ func parseFrp(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, er
 		}
 	}
 
+	// tcp work connections reach localIP:localPort through mihomo's rules instead of a direct dial
+	localDialer := func(_ context.Context, cfg *v1.ProxyBaseConfig, src *net.TCPAddr) (net.Conn, error) {
+		target := socks5.ParseAddr(net.JoinHostPort(cfg.LocalIP, strconv.Itoa(cfg.LocalPort)))
+		if target == nil {
+			return nil, fmt.Errorf("invalid local address %s:%d", cfg.LocalIP, cfg.LocalPort)
+		}
+		var additions []inbound.Addition
+		if src != nil {
+			additions = append(additions, inbound.WithSrcAddr(src))
+		}
+		local, remote := N.Pipe()
+		go route(tunnel, name, remote, target, additions...)
+		return local, nil
+	}
+
 	return &Tunnel{DialerProxy: opt.DialerProxy, run: func(ctx context.Context) {
+		ctx = frpproxy.WithLocalDialer(ctx, localDialer)
 		retry(ctx, name, func(ctx context.Context) error {
 			src := source.NewConfigSource()
 			if err := src.ReplaceAll(res.Proxies, res.Visitors); err != nil {

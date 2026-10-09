@@ -285,8 +285,8 @@ github.com/rasky/go-lzo v0.0.0-20200203143853-96a758eda86e/go.mod h1:9leZcVcItj6
 github.com/rogpeppe/go-internal v1.12.0 h1:exVL4IDcn6na9z1rAb56Vxr+CgyK3nn3O+epU5NdKM8=
 github.com/rogpeppe/go-internal v1.12.0/go.mod h1:E+RYuTGaKKdloAfM02xzb0FW3Paa99yedzYV+kq4uf4=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
-github.com/ryanzhangtianran/frp-for-clash v0.0.0-20261009122044-555f65906b97 h1:zCy10cLPS+DKWp/Yyl6/mSHq8dcGaa6HLjT2/ppAI5U=
-github.com/ryanzhangtianran/frp-for-clash v0.0.0-20261009122044-555f65906b97/go.mod h1:yN3/E+4GIiajShnFO+u9g3TEmbF+yWSlt3/M4q7nPoM=
+github.com/ryanzhangtianran/frp-for-clash v0.0.0-20261009135408-764bc3434694 h1:Do5IW3K0H+PazfZ73ME943589GVzvB17wOPA6U83sZo=
+github.com/ryanzhangtianran/frp-for-clash v0.0.0-20261009135408-764bc3434694/go.mod h1:yN3/E+4GIiajShnFO+u9g3TEmbF+yWSlt3/M4q7nPoM=
 github.com/safchain/ethtool v0.3.0 h1:gimQJpsI6sc1yIqP/y8GYgiXn/NjgvpM0RNoWLVVmP0=
 github.com/safchain/ethtool v0.3.0/go.mod h1:SA9BwrgyAqNo7M+uaL6IYbxpm5wk3L7Mm6ocLW+CJUs=
 github.com/sagernet/netlink v0.0.0-20240612041022-b9a21c07ac6a h1:ObwtHN2VpqE0ZNjr6sGeT00J8uU7JF4cNUdb44/Duis=

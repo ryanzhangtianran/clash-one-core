@@ -246,6 +246,9 @@ tunnels: # one line config
     proxy: proxy
 
 # 反向隧道：把本地服务暴露到远端服务器，配置重载时只重启有变化的条目
+# 反代进来的 TCP 流量按规则分流（IN-TYPE 为 TUNNEL，IN-NAME 为隧道名，源地址为远端用户），
+# 目标是 frp 的 localIP:localPort 或 ssh 的 local；本地服务通常需要直连规则，如 IN-NAME,home-nas,DIRECT
+# frp 的 udp/sudp 代理与插件（plugin）不经过规则
 reverse-tunnels:
   # frpc，config 为原生 frpc v1 配置（字段与 frpc.toml/yaml 相同，驼峰命名）
   - name: home-nas
@@ -269,7 +272,7 @@ reverse-tunnels:
     dialer-proxy: proxy # 可选
     forwards:
       - remote: 0.0.0.0:8080 # 远端监听地址，非 127.0.0.1 需要 sshd 开启 GatewayPorts
-        local: 127.0.0.1:80
+        local: 127.0.0.1:80 # 按规则分流的目标
 
 # DNS 配置
 dns:

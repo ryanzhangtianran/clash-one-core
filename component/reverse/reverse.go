@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
+	"github.com/metacubex/mihomo/adapter/inbound"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/transport/socks5"
 )
 
 const retryInterval = 10 * time.Second // ponytail: fixed retry, switch to backoff if servers get hammered
@@ -21,7 +24,8 @@ type Tunnel struct {
 	run         func(ctx context.Context)
 }
 
-// Parse builds a tunnel from one `reverse-tunnels` entry. tunnel resolves dialer-proxy names at dial time.
+// Parse builds a tunnel from one `reverse-tunnels` entry. tunnel resolves dialer-proxy names
+// and routes incoming connections by rules.
 func Parse(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	name, _ := mapping["name"].(string)
 	if name == "" {
@@ -81,6 +85,12 @@ func Patch(tunnels []*Tunnel) {
 		log.Infoln("[ReverseTunnel] %s starting", name)
 		go t.run(ctx)
 	}
+}
+
+// route hands an incoming connection to mihomo's tunnel, so it is matched by rules
+// (IN-TYPE TUNNEL, IN-NAME = tunnel name) like any other inbound.
+func route(tunnel C.Tunnel, name string, conn net.Conn, target socks5.Addr, additions ...inbound.Addition) {
+	tunnel.HandleTCPConn(inbound.NewSocket(target, conn, C.TUNNEL, append(additions, inbound.WithInName(name))...))
 }
 
 // retry calls serve until ctx is done, waiting retryInterval after each failure.

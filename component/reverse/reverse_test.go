@@ -13,6 +13,11 @@ import (
 
 	frpv1 "github.com/fatedier/frp/pkg/config/v1"
 	frpserver "github.com/fatedier/frp/server"
+	"github.com/metacubex/mihomo/adapter"
+	"github.com/metacubex/mihomo/adapter/outbound"
+	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/rules"
+	"github.com/metacubex/mihomo/tunnel"
 	"github.com/metacubex/ssh"
 	"github.com/stretchr/testify/require"
 )
@@ -37,15 +42,17 @@ func TestFrpTunnel(t *testing.T) {
 			"name": "echo", "type": "tcp", "localIP": "127.0.0.1", "localPort": portOf(t, echo), "remotePort": remotePort,
 		}},
 	}}
-	tun, err := Parse(mapping, nil)
+	tun, err := Parse(mapping, startTunnel(t))
 	require.NoError(t, err)
 	Patch([]*Tunnel{tun})
 	defer Patch(nil)
-	requireEcho(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(remotePort)))
+	remote := net.JoinHostPort("127.0.0.1", strconv.Itoa(remotePort))
+	requireEcho(t, remote)
+	requireRejectedByRule(t, "frp-test", remote)
 
 	// reload with identical config keeps the running instance
 	before := active["frp-test"]
-	same, err := Parse(mapping, nil)
+	same, err := Parse(mapping, tunnel.Tunnel)
 	require.NoError(t, err)
 	Patch([]*Tunnel{same})
 	require.Same(t, before, active["frp-test"])
@@ -64,11 +71,12 @@ func TestSSHTunnel(t *testing.T) {
 		"server": "127.0.0.1", "port": portOf(t, server),
 		"username": "u", "password": "pw",
 		"forwards": []any{map[string]any{"remote": remote, "local": echo}},
-	}, nil)
+	}, startTunnel(t))
 	require.NoError(t, err)
 	Patch([]*Tunnel{tun})
 	defer Patch(nil)
 	requireEcho(t, remote)
+	requireRejectedByRule(t, "ssh-test", remote)
 }
 
 func TestParseErrors(t *testing.T) {
@@ -91,6 +99,33 @@ func TestParseErrors(t *testing.T) {
 		_, err := Parse(mapping, nil)
 		require.Error(t, err, name)
 	}
+}
+
+// startTunnel runs mihomo's tunnel with no rules, so traffic falls through to DIRECT.
+func startTunnel(t *testing.T) C.Tunnel {
+	tunnel.UpdateProxies(map[string]C.Proxy{
+		"DIRECT": adapter.NewProxy(outbound.NewDirect()),
+		"REJECT": adapter.NewProxy(outbound.NewReject()),
+	}, nil)
+	tunnel.UpdateRules(nil, nil, nil)
+	tunnel.OnRunning()
+	return tunnel.Tunnel
+}
+
+// requireRejectedByRule proves reverse traffic is routed by rules: IN-NAME,<name>,REJECT must cut it off.
+func requireRejectedByRule(t *testing.T, name, addr string) {
+	rule, err := rules.ParseRule("IN-NAME", name, "REJECT", nil, nil)
+	require.NoError(t, err)
+	tunnel.UpdateRules([]C.Rule{rule}, nil, nil)
+	defer tunnel.UpdateRules(nil, nil, nil)
+
+	c, err := net.DialTimeout("tcp", addr, time.Second)
+	require.NoError(t, err)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	c.Write([]byte("ping"))
+	_, err = io.ReadFull(c, make([]byte, 4))
+	require.Error(t, err)
 }
 
 func startEcho(t *testing.T) string {

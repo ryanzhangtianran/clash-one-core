@@ -8,11 +8,10 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/outbound"
-	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/structure"
-	"github.com/metacubex/mihomo/component/dialer"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+	"github.com/metacubex/mihomo/transport/socks5"
 )
 
 const sshKeepAlive = 30 * time.Second
@@ -24,8 +23,9 @@ type sshOption struct {
 }
 
 type sshForward struct {
-	Remote string `proxy:"remote"` // address the SSH server listens on, e.g. 0.0.0.0:8080 (needs GatewayPorts for non-loopback)
-	Local  string `proxy:"local"`  // local target, e.g. 127.0.0.1:80
+	Remote string      `proxy:"remote"` // address the SSH server listens on, e.g. 0.0.0.0:8080 (needs GatewayPorts for non-loopback)
+	Local  string      `proxy:"local"`  // target routed by rules, e.g. 127.0.0.1:80
+	target socks5.Addr `proxy:"-"`
 }
 
 func parseSSH(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
@@ -37,11 +37,12 @@ func parseSSH(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, er
 	if len(opt.Forwards) == 0 {
 		return nil, errors.New("forwards is empty")
 	}
-	for _, f := range opt.Forwards {
-		for _, addr := range []string{f.Remote, f.Local} {
-			if _, _, err := net.SplitHostPort(addr); err != nil {
-				return nil, fmt.Errorf("invalid forward address %q: %w", addr, err)
-			}
+	for i, f := range opt.Forwards {
+		if _, _, err := net.SplitHostPort(f.Remote); err != nil {
+			return nil, fmt.Errorf("invalid forward remote %q: %w", f.Remote, err)
+		}
+		if opt.Forwards[i].target = socks5.ParseAddr(f.Local); opt.Forwards[i].target == nil {
+			return nil, fmt.Errorf("invalid forward local %q", f.Local)
 		}
 	}
 	opt.TunnelForAPI = tunnel
@@ -51,12 +52,12 @@ func parseSSH(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, er
 	}
 	return &Tunnel{DialerProxy: opt.DialerProxy, run: func(ctx context.Context) {
 		defer out.Close()
-		retry(ctx, name, func(ctx context.Context) error { return serveSSH(ctx, name, out, opt.Forwards) })
+		retry(ctx, name, func(ctx context.Context) error { return serveSSH(ctx, name, out, opt.Forwards, tunnel) })
 	}}, nil
 }
 
 // serveSSH holds one SSH session with all forwards until the session dies or ctx is done.
-func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []sshForward) error {
+func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []sshForward, tunnel C.Tunnel) error {
 	client, err := out.Client(ctx)
 	if err != nil {
 		return err
@@ -68,7 +69,7 @@ func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []ss
 		if err != nil {
 			return fmt.Errorf("remote listen %s: %w", f.Remote, err)
 		}
-		go acceptLoop(ctx, name, ln, f.Local)
+		go acceptLoop(tunnel, name, ln, f.target)
 		log.Infoln("[ReverseTunnel] %s: remote %s -> local %s", name, f.Remote, f.Local)
 	}
 
@@ -90,20 +91,12 @@ func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []ss
 	}
 }
 
-func acceptLoop(ctx context.Context, name string, ln net.Listener, local string) {
+func acceptLoop(tunnel C.Tunnel, name string, ln net.Listener, target socks5.Addr) {
 	for {
-		c, err := ln.Accept()
+		c, err := ln.Accept() // RemoteAddr is the originating user, so SRC-IP rules work
 		if err != nil {
 			return
 		}
-		go func() {
-			lc, err := dialer.DialContext(ctx, "tcp", local)
-			if err != nil {
-				c.Close()
-				log.Warnln("[ReverseTunnel] %s: dial local %s: %v", name, local, err)
-				return
-			}
-			N.Relay(c, lc)
-		}()
+		go route(tunnel, name, c, target)
 	}
 }
