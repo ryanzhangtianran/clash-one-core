@@ -40,7 +40,7 @@ func TestFrpTunnel(t *testing.T) {
 	tun, err := Parse(mapping, nil)
 	require.NoError(t, err)
 	Patch([]*Tunnel{tun})
-	defer Cleanup()
+	defer Patch(nil)
 	requireEcho(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(remotePort)))
 
 	// reload with identical config keeps the running instance
@@ -67,7 +67,7 @@ func TestSSHTunnel(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 	Patch([]*Tunnel{tun})
-	defer Cleanup()
+	defer Patch(nil)
 	requireEcho(t, remote)
 }
 

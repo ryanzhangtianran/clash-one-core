@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/component/dialer"
-	"github.com/metacubex/mihomo/component/proxydialer"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 )
@@ -36,9 +34,9 @@ func Parse(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	var t *Tunnel
 	switch typ, _ := mapping["type"].(string); typ {
 	case "frp":
-		t, err = parseFrp(mapping, tunnel)
+		t, err = parseFrp(name, mapping, tunnel)
 	case "ssh":
-		t, err = parseSSH(mapping, tunnel)
+		t, err = parseSSH(name, mapping, tunnel)
 	default:
 		err = fmt.Errorf("unsupported type %q", typ)
 	}
@@ -47,13 +45,6 @@ func Parse(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	}
 	t.Name, t.hash = name, string(raw)
 	return t, nil
-}
-
-func newDialer(dialerProxy string, tunnel C.Tunnel) C.Dialer {
-	if dialerProxy != "" {
-		return proxydialer.NewByName(dialerProxy, tunnel)
-	}
-	return dialer.NewDialer()
 }
 
 var (
@@ -90,10 +81,6 @@ func Patch(tunnels []*Tunnel) {
 		log.Infoln("[ReverseTunnel] %s starting", name)
 		go t.run(ctx)
 	}
-}
-
-func Cleanup() {
-	Patch(nil)
 }
 
 // retry calls serve until ctx is done, waiting retryInterval after each failure.

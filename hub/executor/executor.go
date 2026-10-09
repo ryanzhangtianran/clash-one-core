@@ -533,7 +533,7 @@ func updateIPTables(cfg *config.Config) {
 
 func Shutdown() {
 	listener.Cleanup()
-	reverse.Cleanup()
+	reverse.Patch(nil)
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()
 

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
+	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/common/structure"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
@@ -23,11 +23,11 @@ import (
 )
 
 type frpOption struct {
-	DialerProxy string         `proxy:"dialer-proxy,omitempty"`
-	Config      map[string]any `proxy:"config"` // native frpc v1 config (serverAddr, auth, proxies, ...)
+	outbound.BasicOption                // only dialer-proxy is used
+	Config               map[string]any `proxy:"config"` // native frpc v1 config (serverAddr, auth, proxies, ...)
 }
 
-func parseFrp(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
+func parseFrp(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	decoder := structure.NewDecoder(structure.Option{TagName: "proxy", WeaklyTypedInput: true, KeyReplacer: structure.DefaultKeyReplacer})
 	opt := frpOption{}
 	if err := decoder.Decode(mapping, &opt); err != nil {
@@ -70,15 +70,14 @@ func parseFrp(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 			return nil, errors.New("dialer-proxy and transport.proxyURL are mutually exclusive")
 		}
 	default:
-		d := newDialer(opt.DialerProxy, tunnel)
+		opt.TunnelForAPI = tunnel
+		d := opt.NewDialer(nil)
 		connectorCreator = func(ctx context.Context, cfg *v1.ClientCommonConfig) frpclient.Connector {
 			return frpclient.NewConnectorWithDialer(ctx, cfg, d.DialContext)
 		}
 	}
 
-	name, _ := mapping["name"].(string)
 	return &Tunnel{DialerProxy: opt.DialerProxy, run: func(ctx context.Context) {
-		initFrpLog()
 		retry(ctx, name, func(ctx context.Context) error {
 			src := source.NewConfigSource()
 			if err := src.ReplaceAll(res.Proxies, res.Visitors); err != nil {
@@ -97,17 +96,13 @@ func parseFrp(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	}}, nil
 }
 
-var frpLogOnce sync.Once
-
-// initFrpLog routes frp's global logger into mihomo's log; mihomo's log-level does the filtering.
-func initFrpLog() {
-	frpLogOnce.Do(func() {
-		frplog.Logger = frplog.Logger.WithOptions(
-			golog.WithOutput(frpLogWriter{}),
-			golog.WithLevel(golog.DebugLevel),
-			golog.WithCaller(false),
-		)
-	})
+// Route frp's global logger into mihomo's log; mihomo's log-level does the filtering.
+func init() {
+	frplog.Logger = frplog.Logger.WithOptions(
+		golog.WithOutput(frpLogWriter{}),
+		golog.WithLevel(golog.DebugLevel),
+		golog.WithCaller(false),
+	)
 }
 
 type frpLogWriter struct{}

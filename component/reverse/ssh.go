@@ -28,7 +28,7 @@ type sshForward struct {
 	Local  string `proxy:"local"`  // local target, e.g. 127.0.0.1:80
 }
 
-func parseSSH(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
+func parseSSH(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	decoder := structure.NewDecoder(structure.Option{TagName: "proxy", WeaklyTypedInput: true, KeyReplacer: structure.DefaultKeyReplacer})
 	opt := sshOption{}
 	if err := decoder.Decode(mapping, &opt); err != nil {
@@ -49,7 +49,6 @@ func parseSSH(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	if err != nil {
 		return nil, err
 	}
-	name := opt.Name
 	return &Tunnel{DialerProxy: opt.DialerProxy, run: func(ctx context.Context) {
 		defer out.Close()
 		retry(ctx, name, func(ctx context.Context) error { return serveSSH(ctx, name, out, opt.Forwards) })
@@ -63,6 +62,7 @@ func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []ss
 		return err
 	}
 	defer client.Close() // also closes every remote listener below
+	defer context.AfterFunc(ctx, func() { client.Close() })()
 	for _, f := range forwards {
 		ln, err := client.Listen("tcp", f.Remote)
 		if err != nil {
@@ -79,21 +79,13 @@ func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []ss
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			errCh := make(chan error, 1)
-			go func() {
-				_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
-				errCh <- err
-			}()
-			select {
-			case err := <-errCh:
-				if err != nil {
-					return fmt.Errorf("keepalive: %w", err)
-				}
-			case <-time.After(sshKeepAlive):
-				return errors.New("keepalive timeout")
-			case <-ctx.Done():
-				return nil
-			}
+		}
+		// closing the client (on timeout or ctx cancel) unblocks a hung request
+		timeout := time.AfterFunc(sshKeepAlive, func() { client.Close() })
+		_, _, err := client.SendRequest("keepalive@openssh.com", true, nil)
+		timeout.Stop()
+		if err != nil {
+			return fmt.Errorf("keepalive: %w", err)
 		}
 	}
 }
