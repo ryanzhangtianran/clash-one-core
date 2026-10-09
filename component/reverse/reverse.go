@@ -5,23 +5,52 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/inbound"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/transport/socks5"
 )
 
 const retryInterval = 10 * time.Second // ponytail: fixed retry, switch to backoff if servers get hammered
 
+const (
+	StateConnecting = "connecting"
+	StateRunning    = "running"
+	StateRetrying   = "retrying"
+)
+
 type Tunnel struct {
 	Name        string
+	Type        string
 	DialerProxy string
 	hash        string // raw config fingerprint, so a reload only restarts tunnels that changed
 	run         func(ctx context.Context)
+	detail      func(s *Status) // fills Forwards, may refine State
+
+	mu    sync.Mutex
+	state Status // State/Error/Since, set by retry
+}
+
+// Status is a tunnel's live state, served by GET /reverse-tunnels.
+type Status struct {
+	Name     string          `json:"name"`
+	Type     string          `json:"type"`
+	State    string          `json:"state"`
+	Error    string          `json:"error,omitempty"`
+	Since    time.Time       `json:"since"`
+	Forwards []ForwardStatus `json:"forwards"`
+}
+
+type ForwardStatus struct {
+	Name   string `json:"name,omitempty"` // frp proxy name
+	Type   string `json:"type,omitempty"` // frp proxy type
+	Remote string `json:"remote,omitempty"`
+	Local  string `json:"local"`
+	State  string `json:"state,omitempty"` // frp proxy phase
+	Error  string `json:"error,omitempty"`
 }
 
 // Parse builds a tunnel from one `reverse-tunnels` entry. tunnel resolves dialer-proxy names
@@ -35,20 +64,59 @@ func Parse(mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	var t *Tunnel
-	switch typ, _ := mapping["type"].(string); typ {
+	t := &Tunnel{Name: name, hash: string(raw)}
+	switch t.Type, _ = mapping["type"].(string); t.Type {
 	case "frp":
-		t, err = parseFrp(name, mapping, tunnel)
+		err = parseFrp(t, mapping, tunnel)
 	case "ssh":
-		t, err = parseSSH(name, mapping, tunnel)
+		err = parseSSH(t, mapping, tunnel)
 	default:
-		err = fmt.Errorf("unsupported type %q", typ)
+		err = fmt.Errorf("unsupported type %q", t.Type)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	t.Name, t.hash = name, string(raw)
 	return t, nil
+}
+
+func (t *Tunnel) setState(state string, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.state.State != state {
+		t.state.Since = time.Now()
+	}
+	t.state.State, t.state.Error = state, ""
+	if err != nil {
+		t.state.Error = err.Error()
+	}
+}
+
+func (t *Tunnel) Status() Status {
+	t.mu.Lock()
+	s := t.state
+	t.mu.Unlock()
+	s.Name, s.Type = t.Name, t.Type
+	t.detail(&s)
+	return s
+}
+
+// retry calls serve until ctx is done, waiting retryInterval after each failure.
+// serve calls up once its session is established.
+func (t *Tunnel) retry(ctx context.Context, serve func(ctx context.Context, up func()) error) {
+	for {
+		t.setState(StateConnecting, nil)
+		err := serve(ctx, func() { t.setState(StateRunning, nil) })
+		if ctx.Err() != nil {
+			return
+		}
+		t.setState(StateRetrying, err)
+		log.Warnln("[ReverseTunnel] %s: %v, retry in %s", t.Name, err, retryInterval)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retryInterval):
+		}
+	}
 }
 
 var (
@@ -57,7 +125,7 @@ var (
 )
 
 type running struct {
-	hash   string
+	tunnel *Tunnel
 	cancel context.CancelFunc
 }
 
@@ -70,7 +138,7 @@ func Patch(tunnels []*Tunnel) {
 		next[t.Name] = t
 	}
 	for name, r := range active {
-		if t, ok := next[name]; !ok || t.hash != r.hash {
+		if t, ok := next[name]; !ok || t.hash != r.tunnel.hash {
 			log.Infoln("[ReverseTunnel] %s stopped", name)
 			r.cancel()
 			delete(active, name)
@@ -81,30 +149,24 @@ func Patch(tunnels []*Tunnel) {
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		active[name] = &running{hash: t.hash, cancel: cancel}
+		active[name] = &running{tunnel: t, cancel: cancel}
 		log.Infoln("[ReverseTunnel] %s starting", name)
 		go t.run(ctx)
 	}
 }
 
-// route hands an incoming connection to mihomo's tunnel, so it is matched by rules
-// (IN-TYPE TUNNEL, IN-NAME = tunnel name) like any other inbound.
-func route(tunnel C.Tunnel, name string, conn net.Conn, target socks5.Addr, additions ...inbound.Addition) {
-	tunnel.HandleTCPConn(inbound.NewSocket(target, conn, C.TUNNEL, append(additions, inbound.WithInName(name))...))
-}
-
-// retry calls serve until ctx is done, waiting retryInterval after each failure.
-func retry(ctx context.Context, name string, serve func(ctx context.Context) error) {
-	for {
-		err := serve(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		log.Warnln("[ReverseTunnel] %s: %v, retry in %s", name, err, retryInterval)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(retryInterval):
-		}
+// Statuses reports every active tunnel, sorted by name.
+func Statuses() []Status {
+	mu.Lock()
+	tunnels := make([]*Tunnel, 0, len(active))
+	for _, r := range active {
+		tunnels = append(tunnels, r.tunnel)
 	}
+	mu.Unlock()
+	slices.SortFunc(tunnels, func(a, b *Tunnel) int { return strings.Compare(a.Name, b.Name) })
+	statuses := make([]Status, len(tunnels))
+	for i, t := range tunnels {
+		statuses[i] = t.Status()
+	}
+	return statuses
 }

@@ -24,8 +24,8 @@ import (
 
 func TestFrpTunnel(t *testing.T) {
 	t.Setenv("http_proxy", "http://127.0.0.1:1") // must not hijack the mihomo dialer
-	echo := startEcho(t)
-	frpsPort, remotePort := freePort(t), freePort(t)
+	echo, udpEcho := startEcho(t), startUDPEcho(t)
+	frpsPort, remotePort, udpRemotePort := freePort(t), freePort(t), freeUDPPort(t)
 
 	cfg := &frpv1.ServerConfig{BindAddr: "127.0.0.1", BindPort: frpsPort}
 	require.NoError(t, cfg.Complete())
@@ -38,9 +38,10 @@ func TestFrpTunnel(t *testing.T) {
 	mapping := map[string]any{"name": "frp-test", "type": "frp", "config": map[string]any{
 		"serverAddr": "127.0.0.1",
 		"serverPort": frpsPort,
-		"proxies": []any{map[string]any{
-			"name": "echo", "type": "tcp", "localIP": "127.0.0.1", "localPort": portOf(t, echo), "remotePort": remotePort,
-		}},
+		"proxies": []any{
+			map[string]any{"name": "echo", "type": "tcp", "localIP": "127.0.0.1", "localPort": portOf(t, echo), "remotePort": remotePort},
+			map[string]any{"name": "udp-echo", "type": "udp", "localIP": "127.0.0.1", "localPort": portOf(t, udpEcho), "remotePort": udpRemotePort},
+		},
 	}}
 	tun, err := Parse(mapping, startTunnel(t))
 	require.NoError(t, err)
@@ -48,7 +49,17 @@ func TestFrpTunnel(t *testing.T) {
 	defer Patch(nil)
 	remote := net.JoinHostPort("127.0.0.1", strconv.Itoa(remotePort))
 	requireEcho(t, remote)
-	requireRejectedByRule(t, "frp-test", remote)
+	requireUDPEcho(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(udpRemotePort)))
+	requireRejectedByRule(t, "IN-TYPE", "FRP", remote)
+
+	status := Statuses()
+	require.Len(t, status, 1)
+	require.Equal(t, StateRunning, status[0].State)
+	require.Len(t, status[0].Forwards, 2)
+	for _, f := range status[0].Forwards {
+		require.Equal(t, "running", f.State, f.Name)
+		require.NotEmpty(t, f.Remote, f.Name)
+	}
 
 	// reload with identical config keeps the running instance
 	before := active["frp-test"]
@@ -76,7 +87,8 @@ func TestSSHTunnel(t *testing.T) {
 	Patch([]*Tunnel{tun})
 	defer Patch(nil)
 	requireEcho(t, remote)
-	requireRejectedByRule(t, "ssh-test", remote)
+	requireRejectedByRule(t, "IN-NAME", "ssh-test", remote)
+	require.Equal(t, StateRunning, Statuses()[0].State)
 }
 
 func TestParseErrors(t *testing.T) {
@@ -112,9 +124,9 @@ func startTunnel(t *testing.T) C.Tunnel {
 	return tunnel.Tunnel
 }
 
-// requireRejectedByRule proves reverse traffic is routed by rules: IN-NAME,<name>,REJECT must cut it off.
-func requireRejectedByRule(t *testing.T, name, addr string) {
-	rule, err := rules.ParseRule("IN-NAME", name, "REJECT", nil, nil)
+// requireRejectedByRule proves reverse traffic is routed by rules: <ruleType>,<payload>,REJECT must cut it off.
+func requireRejectedByRule(t *testing.T, ruleType, payload, addr string) {
+	rule, err := rules.ParseRule(ruleType, payload, "REJECT", nil, nil)
 	require.NoError(t, err)
 	tunnel.UpdateRules([]C.Rule{rule}, nil, nil)
 	defer tunnel.UpdateRules(nil, nil, nil)
@@ -126,6 +138,47 @@ func requireRejectedByRule(t *testing.T, name, addr string) {
 	c.Write([]byte("ping"))
 	_, err = io.ReadFull(c, make([]byte, 4))
 	require.Error(t, err)
+}
+
+func startUDPEcho(t *testing.T) string {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			pc.WriteTo(buf[:n], addr)
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+func requireUDPEcho(t *testing.T, addr string) {
+	require.Eventually(t, func() bool {
+		c, err := net.Dial("udp", addr)
+		if err != nil {
+			return false
+		}
+		defer c.Close()
+		c.SetDeadline(time.Now().Add(500 * time.Millisecond))
+		if _, err := c.Write([]byte("ping")); err != nil {
+			return false
+		}
+		buf := make([]byte, 16)
+		n, err := c.Read(buf)
+		return err == nil && string(buf[:n]) == "ping"
+	}, 20*time.Second, 200*time.Millisecond)
+}
+
+func freeUDPPort(t *testing.T) int {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer pc.Close()
+	return pc.LocalAddr().(*net.UDPAddr).Port
 }
 
 func startEcho(t *testing.T) string {

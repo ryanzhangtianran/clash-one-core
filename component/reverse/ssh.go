@@ -7,6 +7,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/metacubex/mihomo/adapter/inbound"
 	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/common/structure"
 	C "github.com/metacubex/mihomo/constant"
@@ -28,36 +29,45 @@ type sshForward struct {
 	target socks5.Addr `proxy:"-"`
 }
 
-func parseSSH(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
+func parseSSH(t *Tunnel, mapping map[string]any, tunnel C.Tunnel) error {
 	decoder := structure.NewDecoder(structure.Option{TagName: "proxy", WeaklyTypedInput: true, KeyReplacer: structure.DefaultKeyReplacer})
 	opt := sshOption{}
 	if err := decoder.Decode(mapping, &opt); err != nil {
-		return nil, err
+		return err
 	}
 	if len(opt.Forwards) == 0 {
-		return nil, errors.New("forwards is empty")
+		return errors.New("forwards is empty")
 	}
 	for i, f := range opt.Forwards {
 		if _, _, err := net.SplitHostPort(f.Remote); err != nil {
-			return nil, fmt.Errorf("invalid forward remote %q: %w", f.Remote, err)
+			return fmt.Errorf("invalid forward remote %q: %w", f.Remote, err)
 		}
 		if opt.Forwards[i].target = socks5.ParseAddr(f.Local); opt.Forwards[i].target == nil {
-			return nil, fmt.Errorf("invalid forward local %q", f.Local)
+			return fmt.Errorf("invalid forward local %q", f.Local)
 		}
 	}
 	opt.TunnelForAPI = tunnel
 	out, err := outbound.NewSsh(opt.SshOption)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &Tunnel{DialerProxy: opt.DialerProxy, run: func(ctx context.Context) {
+	t.DialerProxy = opt.DialerProxy
+	t.run = func(ctx context.Context) {
 		defer out.Close()
-		retry(ctx, name, func(ctx context.Context) error { return serveSSH(ctx, name, out, opt.Forwards, tunnel) })
-	}}, nil
+		t.retry(ctx, func(ctx context.Context, up func()) error {
+			return serveSSH(ctx, t.Name, out, opt.Forwards, tunnel, up)
+		})
+	}
+	t.detail = func(s *Status) { // one session carries all forwards, so they share the tunnel state
+		for _, f := range opt.Forwards {
+			s.Forwards = append(s.Forwards, ForwardStatus{Remote: f.Remote, Local: f.Local})
+		}
+	}
+	return nil
 }
 
 // serveSSH holds one SSH session with all forwards until the session dies or ctx is done.
-func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []sshForward, tunnel C.Tunnel) error {
+func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []sshForward, tunnel C.Tunnel, up func()) error {
 	client, err := out.Client(ctx)
 	if err != nil {
 		return err
@@ -72,6 +82,7 @@ func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []ss
 		go acceptLoop(tunnel, name, ln, f.target)
 		log.Infoln("[ReverseTunnel] %s: remote %s -> local %s", name, f.Remote, f.Local)
 	}
+	up()
 
 	ticker := time.NewTicker(sshKeepAlive)
 	defer ticker.Stop()
@@ -97,6 +108,6 @@ func acceptLoop(tunnel C.Tunnel, name string, ln net.Listener, target socks5.Add
 		if err != nil {
 			return
 		}
-		go route(tunnel, name, c, target)
+		go tunnel.HandleTCPConn(inbound.NewSocket(target, c, C.SSH, inbound.WithInName(name)))
 	}
 }

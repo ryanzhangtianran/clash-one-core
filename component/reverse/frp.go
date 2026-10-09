@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	"github.com/metacubex/mihomo/adapter/outbound"
@@ -33,22 +34,22 @@ type frpOption struct {
 	Config               map[string]any `proxy:"config"` // native frpc v1 config (serverAddr, auth, proxies, ...)
 }
 
-func parseFrp(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, error) {
+func parseFrp(t *Tunnel, mapping map[string]any, tunnel C.Tunnel) error {
 	decoder := structure.NewDecoder(structure.Option{TagName: "proxy", WeaklyTypedInput: true, KeyReplacer: structure.DefaultKeyReplacer})
 	opt := frpOption{}
 	if err := decoder.Decode(mapping, &opt); err != nil {
-		return nil, err
+		return err
 	}
 	if len(opt.Config) == 0 {
-		return nil, errors.New("config is empty")
+		return errors.New("config is empty")
 	}
 	b, err := json.Marshal(opt.Config)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	res, err := frpconfig.LoadClientConfigResultFromBytes(b, true)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	common := res.Common
 	common.LoginFailExit = lo.ToPtr(false) // keep retrying like any other mihomo component
@@ -61,7 +62,7 @@ func parseFrp(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, er
 	proxies = frpconfig.CompleteProxyConfigurers(proxies)
 	visitors = frpconfig.CompleteVisitorConfigurers(visitors)
 	if _, err := validation.ValidateAllClientConfig(common, proxies, visitors, nil); err != nil {
-		return nil, err
+		return err
 	}
 
 	// The mihomo dialer carries tcp/websocket/wss; quic and kcp dial on their own.
@@ -69,11 +70,11 @@ func parseFrp(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, er
 	switch proto := common.Transport.Protocol; {
 	case proto == "quic" || proto == "kcp":
 		if opt.DialerProxy != "" {
-			return nil, fmt.Errorf("dialer-proxy does not support frp transport.protocol %s", proto)
+			return fmt.Errorf("dialer-proxy does not support frp transport.protocol %s", proto)
 		}
 	case common.Transport.ProxyURL != "":
 		if opt.DialerProxy != "" {
-			return nil, errors.New("dialer-proxy and transport.proxyURL are mutually exclusive")
+			return errors.New("dialer-proxy and transport.proxyURL are mutually exclusive")
 		}
 	default:
 		opt.TunnelForAPI = tunnel
@@ -83,24 +84,32 @@ func parseFrp(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, er
 		}
 	}
 
-	// tcp work connections reach localIP:localPort through mihomo's rules instead of a direct dial
-	localDialer := func(_ context.Context, cfg *v1.ProxyBaseConfig, src *net.TCPAddr) (net.Conn, error) {
+	// user sessions reach localIP:localPort through mihomo's rules instead of a direct dial
+	localDialer := func(_ context.Context, cfg *v1.ProxyBaseConfig, network string, src net.Addr) (net.Conn, error) {
 		target := socks5.ParseAddr(net.JoinHostPort(cfg.LocalIP, strconv.Itoa(cfg.LocalPort)))
 		if target == nil {
 			return nil, fmt.Errorf("invalid local address %s:%d", cfg.LocalIP, cfg.LocalPort)
 		}
-		var additions []inbound.Addition
+		additions := []inbound.Addition{inbound.WithInName(t.Name)}
+		if network == "udp" {
+			if src == nil {
+				return nil, errors.New("udp session without user address")
+			}
+			return newUDPSession(tunnel, target, src, additions...), nil
+		}
 		if src != nil {
 			additions = append(additions, inbound.WithSrcAddr(src))
 		}
 		local, remote := N.Pipe()
-		go route(tunnel, name, remote, target, additions...)
+		go tunnel.HandleTCPConn(inbound.NewSocket(target, remote, C.FRP, additions...))
 		return local, nil
 	}
 
-	return &Tunnel{DialerProxy: opt.DialerProxy, run: func(ctx context.Context) {
+	var current atomic.Pointer[frpclient.Service]
+	t.DialerProxy = opt.DialerProxy
+	t.run = func(ctx context.Context) {
 		ctx = frpproxy.WithLocalDialer(ctx, localDialer)
-		retry(ctx, name, func(ctx context.Context) error {
+		t.retry(ctx, func(ctx context.Context, _ func()) error {
 			src := source.NewConfigSource()
 			if err := src.ReplaceAll(res.Proxies, res.Visitors); err != nil {
 				return err
@@ -113,9 +122,32 @@ func parseFrp(name string, mapping map[string]any, tunnel C.Tunnel) (*Tunnel, er
 			if err != nil {
 				return err
 			}
+			current.Store(svc)
+			defer current.Store(nil)
 			return svc.Run(ctx)
 		})
-	}}, nil
+	}
+	// frp logs in and retries internally, so "running" means frps currently knows our proxies.
+	t.detail = func(s *Status) {
+		svc := current.Load()
+		for _, p := range proxies {
+			base := p.GetBaseConfig()
+			f := ForwardStatus{Name: base.Name, Type: base.Type, Local: net.JoinHostPort(base.LocalIP, strconv.Itoa(base.LocalPort))}
+			if base.Plugin.Type != "" {
+				f.Local = "plugin:" + base.Plugin.Type
+			}
+			if svc != nil {
+				if ws, ok := svc.StatusExporter().GetProxyStatus(base.Name); ok {
+					f.Remote, f.State, f.Error = ws.RemoteAddr, ws.Phase, ws.Err
+					if s.State == StateConnecting {
+						s.State = StateRunning
+					}
+				}
+			}
+			s.Forwards = append(s.Forwards, f)
+		}
+	}
+	return nil
 }
 
 // Route frp's global logger into mihomo's log; mihomo's log-level does the filtering.

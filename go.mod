@@ -188,4 +188,4 @@ require (
 // for https://github.com/golang/protobuf/issues/1704
 replace google.golang.org/protobuf => github.com/metacubex/protobuf-go v0.0.0-20260306035419-7ceee0674686
 
-replace github.com/fatedier/frp => github.com/ryanzhangtianran/frp-for-clash v0.0.0-20261009135408-764bc3434694
+replace github.com/fatedier/frp => github.com/ryanzhangtianran/frp-for-clash v0.0.0-20261009141115-b8077bc8c177
