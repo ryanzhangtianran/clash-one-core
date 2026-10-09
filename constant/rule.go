@@ -40,6 +40,8 @@ const (
 	AND
 	OR
 	NOT
+	ProcessAncestor
+	ProcessAncestorPath
 )
 
 type RuleType int
@@ -118,6 +120,10 @@ func (rt RuleType) String() string {
 		return "OR"
 	case NOT:
 		return "NOT"
+	case ProcessAncestor:
+		return "ProcessAncestor"
+	case ProcessAncestorPath:
+		return "ProcessAncestorPath"
 	default:
 		return "Unknown"
 	}

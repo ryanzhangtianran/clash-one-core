@@ -216,6 +216,7 @@ type Metadata struct {
 	Host         string     `json:"host"`
 	DNSMode      DNSMode    `json:"dnsMode"`
 	Uid          uint32     `json:"uid"`
+	Pid          uint32     `json:"pid,omitempty"`
 	Process      string     `json:"process"`
 	ProcessPath  string     `json:"processPath"`
 	SpecialProxy string     `json:"specialProxy"`
