@@ -25,6 +25,7 @@ import (
 	"github.com/metacubex/mihomo/component/profile/cachefile"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/component/resource"
+	"github.com/metacubex/mihomo/component/reverse"
 	"github.com/metacubex/mihomo/component/sniffer"
 	"github.com/metacubex/mihomo/component/trie"
 	"github.com/metacubex/mihomo/component/updater"
@@ -108,6 +109,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateTun(cfg.General) // tun should not care "force"
 	updateIPTables(cfg)
 	updateTunnels(cfg.Tunnels)
+	reverse.Patch(cfg.ReverseTunnels)
 
 	tunnel.OnInnerLoading()
 
@@ -531,6 +533,7 @@ func updateIPTables(cfg *config.Config) {
 
 func Shutdown() {
 	listener.Cleanup()
+	reverse.Cleanup()
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()
 

@@ -25,6 +25,7 @@ import (
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/component/process"
 	"github.com/metacubex/mihomo/component/resolver"
+	"github.com/metacubex/mihomo/component/reverse"
 	"github.com/metacubex/mihomo/component/sniffer"
 	"github.com/metacubex/mihomo/component/trie"
 	C "github.com/metacubex/mihomo/constant"
@@ -193,24 +194,25 @@ type TLS struct {
 
 // Config is mihomo config manager
 type Config struct {
-	General       *General
-	Controller    *Controller
-	Experimental  *Experimental
-	IPTables      *IPTables
-	NTP           *NTP
-	DNS           *DNS
-	Hosts         *trie.DomainTrie[resolver.HostValue]
-	Profile       *Profile
-	Rules         []C.Rule
-	SubRules      map[string][]C.Rule
-	Users         []auth.AuthUser
-	Proxies       map[string]C.Proxy
-	Listeners     map[string]C.InboundListener
-	Providers     map[string]P.ProxyProvider
-	RuleProviders map[string]P.RuleProvider
-	Tunnels       []LC.Tunnel
-	Sniffer       *sniffer.Config
-	TLS           *TLS
+	General        *General
+	Controller     *Controller
+	Experimental   *Experimental
+	IPTables       *IPTables
+	NTP            *NTP
+	DNS            *DNS
+	Hosts          *trie.DomainTrie[resolver.HostValue]
+	Profile        *Profile
+	Rules          []C.Rule
+	SubRules       map[string][]C.Rule
+	Users          []auth.AuthUser
+	Proxies        map[string]C.Proxy
+	Listeners      map[string]C.InboundListener
+	Providers      map[string]P.ProxyProvider
+	RuleProviders  map[string]P.RuleProvider
+	Tunnels        []LC.Tunnel
+	ReverseTunnels []*reverse.Tunnel
+	Sniffer        *sniffer.Config
+	TLS            *TLS
 }
 
 type RawCors struct {
@@ -434,6 +436,7 @@ type RawConfig struct {
 	Interface                     string                  `yaml:"interface-name" json:"interface-name"`
 	RoutingMark                   int                     `yaml:"routing-mark" json:"routing-mark"`
 	Tunnels                       []LC.Tunnel             `yaml:"tunnels" json:"tunnels"`
+	ReverseTunnels                []map[string]any        `yaml:"reverse-tunnels" json:"reverse-tunnels"`
 	GeoAutoUpdate                 bool                    `yaml:"geo-auto-update" json:"geo-auto-update"`
 	GeoUpdateInterval             int                     `yaml:"geo-update-interval" json:"geo-update-interval"`
 	GeodataMode                   bool                    `yaml:"geodata-mode" json:"geodata-mode"`
@@ -743,6 +746,11 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		}
 	}
 
+	config.ReverseTunnels, err = parseReverseTunnels(rawCfg.ReverseTunnels, config.Proxies)
+	if err != nil {
+		return nil, err
+	}
+
 	config.Sniffer, err = parseSniffer(rawCfg.Sniffer, ruleProviders)
 	if err != nil {
 		return nil, err
@@ -756,6 +764,28 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 
 //go:linkname temporaryUpdateGeneral
 func temporaryUpdateGeneral(general *General) func()
+
+func parseReverseTunnels(rawTunnels []map[string]any, proxies map[string]C.Proxy) ([]*reverse.Tunnel, error) {
+	tunnels := make([]*reverse.Tunnel, 0, len(rawTunnels))
+	names := map[string]struct{}{}
+	for idx, mapping := range rawTunnels {
+		t, err := reverse.Parse(mapping, T.Tunnel)
+		if err != nil {
+			return nil, fmt.Errorf("reverse tunnel %d: %w", idx, err)
+		}
+		if _, ok := names[t.Name]; ok {
+			return nil, fmt.Errorf("reverse tunnel %s is duplicated", t.Name)
+		}
+		names[t.Name] = struct{}{}
+		if t.DialerProxy != "" {
+			if _, ok := proxies[t.DialerProxy]; !ok {
+				return nil, fmt.Errorf("reverse tunnel %s dialer-proxy %s not found", t.Name, t.DialerProxy)
+			}
+		}
+		tunnels = append(tunnels, t)
+	}
+	return tunnels, nil
+}
 
 func parseGeneral(cfg *RawConfig) (*General, error) {
 	if cfg.GlobalClientFingerprint != "" {
