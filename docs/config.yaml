@@ -25,6 +25,17 @@ lan-disallowed-ips: # 禁止连接的 IP 地址段，黑名单优先级高于白
 #  - off, 不匹配进程，推荐在路由器上使用此模式
 find-process-mode: strict
 
+# 流量接入方式（Clash One）：不填则沿用 tun.enable
+capture:
+  # system-proxy: 关闭 TUN，由 GUI 把系统代理指向 mixed-port（内核不改系统设置）
+  # tun:          开启 TUN，全部流量按规则
+  # process-tun:  开启 TUN，仅 processes 中的进程及其子进程按规则，其余 TUN 流量直连（需 rule 模式）；
+  #               macOS 无法按进程分路由，其他应用的流量仍经过内核，只是直接放行。
+  #               DNS 不劫持（应用经 mDNSResponder/resolved 解析，无法按进程区分），各应用拿真实 IP；
+  #               自动开启 sniffer 从 TLS/HTTP/QUIC 还原域名供规则匹配
+  mode: process-tun
+  processes: [ghostty]
+
 mode: rule
 
 #自定义 geodata url
@@ -324,6 +335,9 @@ dns:
   fake-ip-ttl: 1
 
   # use-hosts: true # 查询 hosts
+  # 跟随系统的分域名 DNS（公司 VPN、Tailscale MagicDNS 等）：这些域名交给系统指定的服务器（绑定其网卡）解析，
+  # 并排除在 fake-ip 之外，使流量走系统路由（VPN）。来源 macOS scutil --dns、Linux resolvectl；每 30 秒检测变化
+  # use-system-resolvers: true
 
   # 配置后面的nameserver、fallback和nameserver-policy向dns服务器的连接过程是否遵守遵守rules规则
   # 如果为false（默认值）则这三部分的dns服务器在未特别指定的情况下会直连
@@ -2029,7 +2043,7 @@ rules:
   - IP-CIDR,1.1.1.1/32,ss1
   - IP-CIDR6,2409::/64,DIRECT
   # 进程自身或任一父进程的可执行文件名/路径匹配（macOS、Linux），如终端里启动的所有程序；
-  # 需要能查到进程（TUN 下 macOS 须以 root 运行）。tmux 等守护进程会断开进程链
+  # 依赖进程查找（find-process-mode 不能为 off）。tmux 等守护进程会断开进程链
   - AND,((PROCESS-ANCESTOR,ghostty),(PROCESS-NAME,claude)),ss1
   - PROCESS-ANCESTOR,ghostty,ss1
   - PROCESS-ANCESTOR-PATH,/Applications/Ghostty.app/Contents/MacOS/ghostty,ss1

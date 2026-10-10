@@ -42,6 +42,7 @@ const (
 	NOT
 	ProcessAncestor
 	ProcessAncestorPath
+	CaptureFilter
 )
 
 type RuleType int
@@ -124,6 +125,8 @@ func (rt RuleType) String() string {
 		return "ProcessAncestor"
 	case ProcessAncestorPath:
 		return "ProcessAncestorPath"
+	case CaptureFilter:
+		return "CaptureFilter"
 	default:
 		return "Unknown"
 	}

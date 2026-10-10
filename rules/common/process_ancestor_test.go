@@ -34,8 +34,8 @@ func TestProcessAncestor(t *testing.T) {
 	self, err = filepath.EvalSymlinks(self)
 	require.NoError(t, err)
 
-	// FindProcess reports the pid. Own socket only: macOS hides other processes' sockets from
-	// non-root, which is fine in production since TUN mode runs as root.
+	// FindProcess reports the pid. Own socket only: under `go test` on macOS the socket table can
+	// list just the test's own sockets (a standalone binary sees other processes).
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer ln.Close()
@@ -71,6 +71,18 @@ func TestProcessAncestor(t *testing.T) {
 	require.True(t, match(C.ProcessAncestor, filepath.Base(self)), "parent by name")
 	require.True(t, match(C.ProcessAncestorPath, self), "parent by path")
 	require.False(t, match(C.ProcessAncestor, "no-such-process"))
+
+	// process-tun: only TUN traffic outside the listed processes is forced DIRECT
+	metadata.Type = C.TUN
+	filtered := func(names ...string) bool {
+		ok, adapter := NewCaptureFilter(names).Match(metadata, C.RuleMatchHelper{})
+		require.Equal(t, "DIRECT", adapter)
+		return ok
+	}
+	require.False(t, filtered(filepath.Base(self)), "descendant of a listed process follows the rules")
+	require.True(t, filtered("no-such-process"), "other processes go DIRECT")
+	metadata.Type = C.HTTP
+	require.False(t, filtered("no-such-process"), "non-TUN inbounds are untouched")
 
 	metadata.Pid = 0 // without a pid only the process itself can match
 	require.False(t, match(C.ProcessAncestor, filepath.Base(self)))

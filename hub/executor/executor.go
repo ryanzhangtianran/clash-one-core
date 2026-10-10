@@ -27,6 +27,7 @@ import (
 	"github.com/metacubex/mihomo/component/resource"
 	"github.com/metacubex/mihomo/component/reverse"
 	"github.com/metacubex/mihomo/component/sniffer"
+	"github.com/metacubex/mihomo/component/sysdns"
 	"github.com/metacubex/mihomo/component/trie"
 	"github.com/metacubex/mihomo/component/updater"
 	"github.com/metacubex/mihomo/config"
@@ -103,7 +104,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
-	updateDNS(cfg.DNS, cfg.General.IPv6)
+	applyDNS(cfg.DNS, cfg.General.IPv6)
 	updateNTP(cfg.NTP) // initialize NTP after DNS because an NTP server may be a hostname.
 	updateListeners(cfg.General, cfg.Listeners, force)
 	updateTun(cfg.General) // tun should not care "force"
@@ -234,6 +235,52 @@ func updateNTP(c *config.NTP) {
 		)
 	} else {
 		ntp.ReCreateNTPService("", 0, "", nil, false)
+	}
+}
+
+// dnsState is the last applied DNS config and the OS split resolvers merged into it; guarded by mux.
+var dnsState struct {
+	base       *config.DNS
+	ipv6       bool
+	split      string
+	watchStart sync.Once
+}
+
+// applyDNS installs c plus, with dns.use-system-resolvers, the OS's current split resolvers. Caller holds mux.
+func applyDNS(c *config.DNS, ipv6 bool) {
+	resolvers := systemResolvers(c)
+	updateDNS(c.WithSystemResolvers(resolvers), ipv6)
+	dnsState.base, dnsState.ipv6, dnsState.split = c, ipv6, fmt.Sprint(resolvers)
+	if c.UseSystemResolvers {
+		dnsState.watchStart.Do(func() { go watchSystemResolvers() })
+	}
+}
+
+func systemResolvers(c *config.DNS) []sysdns.Resolver {
+	if !c.Enable || !c.UseSystemResolvers {
+		return nil
+	}
+	resolvers, err := sysdns.SplitResolvers()
+	if err != nil {
+		log.Warnln("[DNS] read system resolvers: %v", err)
+	}
+	return resolvers
+}
+
+// watchSystemResolvers reapplies DNS when the OS split resolvers change, e.g. a VPN connects.
+// ponytail: polls scutil/resolvectl every 30s; use SCDynamicStore / resolved D-Bus signals if the lag matters
+func watchSystemResolvers() {
+	for range time.Tick(30 * time.Second) {
+		mux.Lock()
+		if base := dnsState.base; base != nil && base.Enable && base.UseSystemResolvers {
+			resolvers := systemResolvers(base)
+			if split := fmt.Sprint(resolvers); split != dnsState.split {
+				log.Infoln("[DNS] system split resolvers changed: %s", split)
+				updateDNS(base.WithSystemResolvers(resolvers), dnsState.ipv6)
+				dnsState.split = split
+			}
+		}
+		mux.Unlock()
 	}
 }
 
