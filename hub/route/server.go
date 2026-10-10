@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -284,7 +285,13 @@ func startUnix(cfg *Config) {
 			log.Errorln("External controller unix listen error: %s", err)
 			return
 		}
-		_ = os.Chmod(addr, 0o666)
+		// CLASH_ONE_SOCKET_UID hands a root daemon's socket to the one user its GUI runs as.
+		if uid, err := strconv.Atoi(os.Getenv("CLASH_ONE_SOCKET_UID")); err == nil {
+			_ = os.Chown(addr, uid, -1)
+			_ = os.Chmod(addr, 0o600)
+		} else {
+			_ = os.Chmod(addr, 0o666)
+		}
 		log.Infoln("RESTful API unix listening at: %s", l.Addr().String())
 
 		server := &http.Server{
