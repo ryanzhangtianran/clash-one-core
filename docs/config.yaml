@@ -29,7 +29,7 @@ find-process-mode: strict
 capture:
   # system-proxy: 关闭 TUN，由 GUI 把系统代理指向 mixed-port（内核不改系统设置）
   # tun:          开启 TUN，全部流量按规则
-  # process-tun:  开启 TUN，仅 processes 中的进程及其子进程按规则，其余 TUN 流量直连（需 rule 模式）；
+  # process-tun:  开启 TUN，仅 processes 中的进程及其子进程按规则，其余 TUN 流量直连（global 模式下同样直连）；
   #               macOS 无法按进程分路由，其他应用的流量仍经过内核，只是直接放行。
   #               DNS 不劫持（应用经 mDNSResponder/resolved 解析，无法按进程区分），各应用拿真实 IP；
   #               自动开启 sniffer 从 TLS/HTTP/QUIC 还原域名供规则匹配

@@ -208,7 +208,76 @@ func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[strin
 	rules = newRules
 	ruleProviders = rp
 	subRules = newSubRule
+	tempRules = nil // temporary rules last until the next reload
 	configMux.Unlock()
+}
+
+// TempRule is a runtime-only rule, matched ahead of the configured rules.
+type TempRule struct {
+	ID   int
+	Rule C.Rule
+}
+
+var (
+	tempRules  []TempRule // guarded by configMux, newest last
+	tempRuleID int
+)
+
+func AddTempRule(rule C.Rule) int {
+	configMux.Lock()
+	defer configMux.Unlock()
+	tempRuleID++
+	tempRules = append(slices.Clone(tempRules), TempRule{ID: tempRuleID, Rule: rule})
+	return tempRuleID
+}
+
+// RemoveTempRule deletes one temporary rule, or all of them when id is 0.
+func RemoveTempRule(id int) bool {
+	configMux.Lock()
+	defer configMux.Unlock()
+	if id == 0 {
+		tempRules = nil
+		return true
+	}
+	n := len(tempRules)
+	tempRules = slices.DeleteFunc(slices.Clone(tempRules), func(t TempRule) bool { return t.ID == id })
+	return len(tempRules) != n
+}
+
+// TempRules returns the temporary rules, newest first (their match order).
+func TempRules() []TempRule {
+	configMux.RLock()
+	defer configMux.RUnlock()
+	out := slices.Clone(tempRules)
+	slices.Reverse(out)
+	return out
+}
+
+// outsideCaptureScope reports whether process-tun's CaptureFilter sends metadata DIRECT, so global
+// mode, which skips the rules, still leaves processes outside the capture scope alone.
+func outsideCaptureScope(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Rule, bool) {
+	configMux.RLock()
+	defer configMux.RUnlock()
+	if len(rules) == 0 || rules[0].RuleType() != C.CaptureFilter {
+		return nil, false
+	}
+	matched, _ := rules[0].Match(metadata, helper)
+	return rules[0], matched
+}
+
+// withTempRules puts the temporary rules, newest first, ahead of the configured rules but behind a
+// process-tun CaptureFilter, so they never pull in traffic the capture scope leaves out.
+func withTempRules(rules []C.Rule, temp []TempRule) []C.Rule {
+	head := 0
+	if len(rules) > 0 && rules[0].RuleType() == C.CaptureFilter {
+		head = 1
+	}
+	out := make([]C.Rule, 0, len(rules)+len(temp))
+	out = append(out, rules[:head]...)
+	for i := len(temp) - 1; i >= 0; i-- {
+		out = append(out, temp[i].Rule)
+	}
+	return append(out, rules[head:]...)
 }
 
 // Proxies return all proxies
@@ -404,6 +473,15 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		proxy = proxies["DIRECT"]
 	case Global:
 		proxy = proxies["GLOBAL"]
+		switch {
+		case metadata.Type == C.FRP || metadata.Type == C.SSH:
+			// reverse tunnels serve local targets that a global exit can't reach: keep their rules
+			proxy, rule, err = match(metadata, helper)
+		default:
+			if filter, outside := outsideCaptureScope(metadata, helper); outside {
+				proxy, rule = proxies["DIRECT"], filter
+			}
+		}
 	// Rule
 	default:
 		proxy, rule, err = match(metadata, helper)
@@ -717,6 +795,9 @@ func getRules(metadata *C.Metadata) []C.Rule {
 		return sr
 	} else {
 		log.Debugln("[Rule] use default rules")
+		if len(tempRules) != 0 {
+			return withTempRules(rules, tempRules)
+		}
 		return rules
 	}
 }
