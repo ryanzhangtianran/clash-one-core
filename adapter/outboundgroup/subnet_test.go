@@ -44,8 +44,8 @@ func TestSubnetMembers(t *testing.T) {
 }
 
 func TestCurrentNetwork(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("macOS only")
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("macOS and Linux only")
 	}
 	n := CurrentNetwork()
 	if n.Router == "" || len(n.Addrs) == 0 {
