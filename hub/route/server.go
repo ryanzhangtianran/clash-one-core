@@ -286,8 +286,8 @@ func startUnix(cfg *Config) {
 			log.Errorln("External controller unix listen error: %s", err)
 			return
 		}
-		// CLASH_ONE_SOCKET_UID hands a root daemon's socket to the one user its GUI runs as.
-		if uid, err := strconv.Atoi(os.Getenv("CLASH_ONE_SOCKET_UID")); err == nil {
+		// CONNAIO_SOCKET_UID hands a root daemon's socket to the one user its GUI runs as.
+		if uid, err := strconv.Atoi(os.Getenv("CONNAIO_SOCKET_UID")); err == nil {
 			_ = os.Chown(addr, uid, -1)
 			_ = os.Chmod(addr, 0o600)
 		} else {

@@ -16,7 +16,7 @@ func upgradeRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Post("/ui", updateUI)
 	if !embedMode { // disallow upgrade geo in embed mode
-		// Clash One ships the core inside the app; self-upgrading would swap in upstream mihomo.
+		// Connaio ships the core inside the app; self-upgrading would swap in upstream mihomo.
 		r.Post("/geo", updateGeoDatabases)
 	}
 	return r

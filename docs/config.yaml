@@ -25,7 +25,7 @@ lan-disallowed-ips: # 禁止连接的 IP 地址段，黑名单优先级高于白
 #  - off, 不匹配进程，推荐在路由器上使用此模式
 find-process-mode: strict
 
-# 流量接入方式（Clash One）：不填则沿用 tun.enable
+# 流量接入方式（Connaio）：不填则沿用 tun.enable
 capture:
   # system-proxy: 关闭 TUN，由 GUI 把系统代理指向 mixed-port（内核不改系统设置）
   # tun:          开启 TUN，全部流量按规则
