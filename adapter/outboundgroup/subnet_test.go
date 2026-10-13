@@ -47,7 +47,7 @@ func TestCurrentNetwork(t *testing.T) {
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		t.Skip("macOS and Linux only")
 	}
-	n := CurrentNetwork()
+	n := readNetwork()
 	if n.Router == "" || len(n.Addrs) == 0 {
 		t.Skipf("no default route here: %+v", n)
 	}

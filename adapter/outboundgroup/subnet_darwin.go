@@ -4,26 +4,30 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"strings"
+	"sync"
 )
 
-// The root daemon switches ipconfig to verbose at startup, so its `ipconfig getsummary` shows the
-// SSID and BSSID that macOS otherwise redacts.
-func init() {
-	if os.Geteuid() == 0 {
-		go exec.Command("ipconfig", "setverbose", "1").Run()
-	}
+var verbose sync.Once
+
+// prepareNetwork switches ipconfig to verbose once a subnet group exists in the root daemon, so
+// its `ipconfig getsummary` shows the SSID and BSSID that macOS otherwise redacts.
+func prepareNetwork() {
+	verbose.Do(func() {
+		if os.Geteuid() == 0 {
+			go run("ipconfig", "setverbose", "1")
+		}
+	})
 }
 
-// CurrentNetwork reads the default route and `ipconfig getsummary` for its interface. Only the root
+// readNetwork reads the default route and `ipconfig getsummary` for its interface. Only the root
 // daemon sees SSID and BSSID; a user-level core gets them redacted, so only ROUTER, CIDR and TYPE
 // rules match there.
-func CurrentNetwork() Network {
+func readNetwork() Network {
 	var n Network
-	route, _ := exec.Command("route", "-n", "get", "default").Output()
-	iface := field(string(route), "interface", 0)
-	n.Router = field(string(route), "gateway", 0)
+	route := run("route", "-n", "get", "default")
+	iface := field(route, "interface", 0)
+	n.Router = field(route, "gateway", 0)
 	if iface == "" {
 		return n
 	}
@@ -35,8 +39,7 @@ func CurrentNetwork() Network {
 			}
 		}
 	}
-	out, _ := exec.Command("ipconfig", "getsummary", iface).Output()
-	sum := string(out)
+	sum := run("ipconfig", "getsummary", iface)
 	n.WiFi = field(sum, "InterfaceType", 2) == "WiFi"
 	n.Wired = !n.WiFi
 	if v := field(sum, "SSID", 2); v != "<redacted>" {

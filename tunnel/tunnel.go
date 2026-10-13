@@ -208,7 +208,7 @@ func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[strin
 	rules = newRules
 	ruleProviders = rp
 	subRules = newSubRule
-	tempRules = nil // temporary rules last until the next reload
+	tempRules, rulesWithTemp = nil, nil // temporary rules last until the next reload
 	configMux.Unlock()
 }
 
@@ -219,8 +219,9 @@ type TempRule struct {
 }
 
 var (
-	tempRules  []TempRule // guarded by configMux, newest last
-	tempRuleID int
+	tempRules     []TempRule // guarded by configMux, newest last
+	tempRuleID    int
+	rulesWithTemp []C.Rule // rules with tempRules ahead of them, rebuilt when either changes; nil when none
 )
 
 func AddTempRule(rule C.Rule) int {
@@ -228,6 +229,7 @@ func AddTempRule(rule C.Rule) int {
 	defer configMux.Unlock()
 	tempRuleID++
 	tempRules = append(slices.Clone(tempRules), TempRule{ID: tempRuleID, Rule: rule})
+	rulesWithTemp = withTempRules(rules, tempRules)
 	return tempRuleID
 }
 
@@ -236,11 +238,15 @@ func RemoveTempRule(id int) bool {
 	configMux.Lock()
 	defer configMux.Unlock()
 	if id == 0 {
-		tempRules = nil
+		tempRules, rulesWithTemp = nil, nil
 		return true
 	}
 	n := len(tempRules)
 	tempRules = slices.DeleteFunc(slices.Clone(tempRules), func(t TempRule) bool { return t.ID == id })
+	rulesWithTemp = nil
+	if len(tempRules) > 0 {
+		rulesWithTemp = withTempRules(rules, tempRules)
+	}
 	return len(tempRules) != n
 }
 
@@ -795,8 +801,8 @@ func getRules(metadata *C.Metadata) []C.Rule {
 		return sr
 	} else {
 		log.Debugln("[Rule] use default rules")
-		if len(tempRules) != 0 {
-			return withTempRules(rules, tempRules)
+		if rulesWithTemp != nil {
+			return rulesWithTemp
 		}
 		return rules
 	}

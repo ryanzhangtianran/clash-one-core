@@ -5,14 +5,16 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 )
 
-// CurrentNetwork reads the default route from /proc/net/route, the interface's addresses, and
-// the connected Wi-Fi's SSID and BSSID from NetworkManager (nmcli), which Ubuntu's desktop uses.
-func CurrentNetwork() Network {
+func prepareNetwork() {}
+
+// readNetwork reads the default route from /proc/net/route, the interface's addresses, and the
+// connected Wi-Fi's SSID and BSSID from NetworkManager (nmcli), which Ubuntu's desktop uses.
+// Without --rescan no, nmcli would scan the air every 30s and stall the link each time.
+func readNetwork() Network {
 	var n Network
 	b, _ := os.ReadFile("/proc/net/route")
 	iface, gw := defaultRoute(string(b))
@@ -32,8 +34,7 @@ func CurrentNetwork() Network {
 	n.WiFi = err == nil
 	n.Wired = !n.WiFi
 	if n.WiFi {
-		out, _ := exec.Command("nmcli", "-t", "-f", "ACTIVE,SSID,BSSID", "device", "wifi").Output()
-		n.SSID, n.BSSID = activeWiFi(string(out))
+		n.SSID, n.BSSID = activeWiFi(run("nmcli", "-t", "-f", "ACTIVE,SSID,BSSID", "device", "wifi", "--rescan", "no"))
 	}
 	return n
 }

@@ -147,7 +147,7 @@ func stunBinding(pc C.PacketConn, to net.Addr) (string, error) {
 			}
 			return net.JoinHostPort(ip.String(), fmt.Sprint(port)), nil
 		}
-		b = b[4+(n+3)&^3:]
+		b = b[min(len(b), 4+(n+3)&^3):]
 	}
 	return "", errors.New("no mapped address")
 }

@@ -2,5 +2,7 @@
 
 package outboundgroup
 
-// CurrentNetwork is only implemented on macOS and Linux; elsewhere subnet groups use their default.
-func CurrentNetwork() Network { return Network{} }
+// readNetwork is only implemented on macOS and Linux; elsewhere subnet groups use their default.
+func readNetwork() Network { return Network{} }
+
+func prepareNetwork() {}

@@ -68,14 +68,18 @@ func parseSSH(t *Tunnel, mapping map[string]any, tunnel C.Tunnel) error {
 
 // serveSSH holds one SSH session with all forwards until the session dies or ctx is done.
 func serveSSH(ctx context.Context, name string, out *outbound.Ssh, forwards []sshForward, tunnel C.Tunnel, up func()) error {
-	client, err := out.Client(ctx)
+	handshake, cancel := context.WithTimeout(ctx, 30*time.Second)
+	client, err := out.Client(handshake)
+	cancel()
 	if err != nil {
 		return err
 	}
 	defer client.Close() // also closes every remote listener below
 	defer context.AfterFunc(ctx, func() { client.Close() })()
 	for _, f := range forwards {
+		timeout := time.AfterFunc(30*time.Second, func() { client.Close() }) // a server that accepts and then stalls
 		ln, err := client.Listen("tcp", f.Remote)
+		timeout.Stop()
 		if err != nil {
 			return fmt.Errorf("remote listen %s: %w", f.Remote, err)
 		}

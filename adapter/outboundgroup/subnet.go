@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/netip"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -29,16 +30,13 @@ type Subnet struct {
 	def        string
 	rules      map[string]string
 	disableUDP bool
-
-	mu      sync.Mutex
-	checked time.Time
-	current string
 }
 
 func NewSubnet(option GroupCommonOption, opt SubnetOption, emptyFallback C.Proxy, providers []P.ProxyProvider) (*Subnet, error) {
 	if opt.Default == "" {
 		return nil, fmt.Errorf("%s: subnet group needs a default", option.Name)
 	}
+	prepareNetwork()
 	return &Subnet{
 		GroupBase: NewGroupBase(GroupBaseOption{
 			Name:           option.Name,
@@ -107,16 +105,45 @@ func matchNetwork(n Network, rules map[string]string, def string) string {
 	return def
 }
 
-// target is the member for the current network, re-read at most every 5s.
-// ponytail: polled lazily on use; subscribe to SCDynamicStore network changes if 5s lag matters.
+// target is the member for the current network.
 func (s *Subnet) target() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if time.Since(s.checked) > 5*time.Second {
-		s.checked = time.Now()
-		s.current = matchNetwork(CurrentNetwork(), s.rules, s.def)
+	return matchNetwork(CurrentNetwork(), s.rules, s.def)
+}
+
+// The current network, read by commands that take tens of milliseconds, so it is cached and
+// refreshed in the background: a dial never waits on them, except the very first.
+// ponytail: polled lazily on use, 5s stale at most; subscribe to network changes if the lag matters.
+var network struct {
+	sync.Mutex
+	checked    time.Time
+	refreshing bool
+	current    Network
+}
+
+// CurrentNetwork is the network as of the last read, starting a new one when that is over 5s old.
+func CurrentNetwork() Network {
+	network.Lock()
+	defer network.Unlock()
+	if network.checked.IsZero() {
+		network.current, network.checked = readNetwork(), time.Now()
+	} else if time.Since(network.checked) > 5*time.Second && !network.refreshing {
+		network.refreshing = true
+		go func() {
+			n := readNetwork()
+			network.Lock()
+			network.current, network.checked, network.refreshing = n, time.Now(), false
+			network.Unlock()
+		}()
 	}
-	return s.current
+	return network.current
+}
+
+// run is a command's output, or nothing after two seconds.
+func run(name string, args ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(ctx, name, args...).Output()
+	return string(out)
 }
 
 func (s *Subnet) selectedProxy(touch bool) C.Proxy {

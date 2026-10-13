@@ -114,6 +114,7 @@ func parseFrp(t *Tunnel, mapping map[string]any, tunnel C.Tunnel) error {
 			if err := src.ReplaceAll(res.Proxies, res.Visitors); err != nil {
 				return err
 			}
+			frplog.Logger = frplog.Logger.WithOptions(golog.WithLevel(frpLevel()))
 			svc, err := frpclient.NewService(frpclient.ServiceOptions{
 				Common:                 common,
 				ConfigSourceAggregator: source.NewAggregator(src),
@@ -150,13 +151,23 @@ func parseFrp(t *Tunnel, mapping map[string]any, tunnel C.Tunnel) error {
 	return nil
 }
 
-// Route frp's global logger into mihomo's log; mihomo's log-level does the filtering.
+// Route frp's global logger into mihomo's log. frp formats every line it is allowed to emit, so
+// its level follows mihomo's; frpLevel is applied again whenever a tunnel starts.
 func init() {
-	frplog.Logger = frplog.Logger.WithOptions(
-		golog.WithOutput(frpLogWriter{}),
-		golog.WithLevel(golog.DebugLevel),
-		golog.WithCaller(false),
-	)
+	frplog.Logger = frplog.Logger.WithOptions(golog.WithOutput(frpLogWriter{}), golog.WithLevel(frpLevel()), golog.WithCaller(false))
+}
+
+func frpLevel() golog.Level {
+	switch log.Level() {
+	case log.DEBUG:
+		return golog.DebugLevel
+	case log.INFO:
+		return golog.InfoLevel
+	case log.WARNING:
+		return golog.WarnLevel
+	default:
+		return golog.ErrorLevel
+	}
 }
 
 type frpLogWriter struct{}
