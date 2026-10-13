@@ -2,6 +2,7 @@ package executor
 
 import (
 	"fmt"
+	"github.com/metacubex/mihomo/adapter/outbound"
 	"net"
 	"net/netip"
 	"os"
@@ -358,6 +359,7 @@ func updateHosts(tree *trie.DomainTrie[resolver.HostValue]) {
 
 func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) {
 	tunnel.UpdateProxies(proxies, providers)
+	outbound.ApplyEasyConnects(proxies)
 }
 
 func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {

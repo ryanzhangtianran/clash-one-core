@@ -43,6 +43,7 @@ const (
 	ProcessAncestor
 	ProcessAncestorPath
 	CaptureFilter
+	EasyConnectRule
 )
 
 type RuleType int
@@ -105,6 +106,8 @@ func (rt RuleType) String() string {
 		return "RematchName"
 	case MATCH:
 		return "Match"
+	case EasyConnectRule:
+		return "EasyConnect"
 	case RuleSet:
 		return "RuleSet"
 	case Network:

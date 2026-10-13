@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
+	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
@@ -136,6 +137,9 @@ func router(isDebug bool, secret string, dohServer string, cors Cors) *chi.Mux {
 		r.Mount("/cache", cacheRouter())
 		r.Mount("/dns", dnsRouter())
 		r.Mount("/reverse-tunnels", reverseTunnelRouter())
+		r.Get("/easyconnect", func(w http.ResponseWriter, r *http.Request) { // every EasyConnect outbound: tunnel state, address, what the gateway routes
+			render.JSON(w, r, render.M{"tunnels": outbound.EasyConnectStatuses()})
+		})
 		r.Mount("/network", networkRouter())
 		r.Mount("/storage", storageRouter())
 		if !embedMode { // disallow restart in embed mode
