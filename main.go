@@ -77,7 +77,18 @@ func init() {
 	flag.Parse()
 }
 
+// stopSign is closed when the Windows service manager asks the core to stop; see main_windows.go.
+var stopSign = make(chan struct{})
+
 func main() {
+	if runAsService() {
+		return
+	}
+	run()
+}
+
+// run is the core's whole life: it returns on SIGTERM, SIGINT or a service stop.
+func run() {
 	// Defensive programming: panic when code mistakenly calls net.DefaultResolver
 	net.DefaultResolver.PreferGo = true
 	net.DefaultResolver.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -243,6 +254,8 @@ func main() {
 	for {
 		select {
 		case <-termSign:
+			return
+		case <-stopSign:
 			return
 		case <-hupSign:
 			if err := hub.Parse(configBytes, options...); err != nil {
