@@ -94,6 +94,8 @@ func ParseRule(tp, payload, target string, params []string, subRules map[string]
 	case "RULE-SET":
 		isSrc, noResolve := RC.ParseParams(params)
 		parsed, parseErr = RP.NewRuleSet(payload, target, isSrc, noResolve)
+	case "EASYCONNECT":
+		parsed = RC.NewEasyConnect(payload, target)
 	case "MATCH":
 		parsed = RC.NewMatch(target)
 		parseErr = nil
