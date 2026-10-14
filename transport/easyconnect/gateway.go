@@ -267,6 +267,18 @@ func (g *Gateway) UpdateSession(ctx context.Context) bool {
 	return err != nil || r.status != 404
 }
 
+// Logout ends the gateway's web session, as the official client does on exit. Without it the
+// session lingers until the gateway's idle timeout, and the next login for the account is
+// refused a tunnel address. Best effort, bounded.
+func (g *Gateway) Logout() {
+	if g.twfid == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = g.request(ctx, "GET", "/por/logout.csp?apiversion=1", nil)
+}
+
 // Resources is what the gateway will route for this session.
 func (g *Gateway) Resources(ctx context.Context) Routing {
 	r, err := g.request(ctx, "GET", "/por/rclist.csp", nil)

@@ -62,6 +62,7 @@ func Open(ctx context.Context, gw *Gateway, username, password, totpSecret strin
 		return nil, err
 	}
 	if err := gw.RequestToken(ctx); err != nil {
+		gw.Logout()
 		return nil, err
 	}
 	started := time.Now()
@@ -72,17 +73,20 @@ func Open(ctx context.Context, gw *Gateway, username, password, totpSecret strin
 	}
 	control, err := gw.RequestAddress(ctx)
 	if err != nil {
+		gw.Logout()
 		return nil, err
 	}
 	sender, err := gw.OpenTunnel(ctx, true)
 	if err != nil {
 		control.Close()
+		gw.Logout()
 		return nil, err
 	}
 	receiver, err := gw.OpenTunnel(ctx, false)
 	if err != nil {
 		sender.Close()
 		control.Close()
+		gw.Logout()
 		return nil, err
 	}
 	s := &Session{
@@ -125,6 +129,7 @@ func (s *Session) Close() {
 		}
 	}
 	s.control.Close()
+	s.gw.Logout() // frees the account for the next login
 }
 
 // guard runs a goroutine's body, recording a panic as the failure rather than
