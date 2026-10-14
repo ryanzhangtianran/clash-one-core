@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/metacubex/mihomo/common/cmd"
 	"github.com/metacubex/mihomo/component/age"
@@ -74,11 +75,28 @@ func init() {
 	flag.BoolVar(&geodataMode, "m", false, "set geodata mode")
 	flag.BoolVar(&version, "v", false, "show current version of mihomo")
 	flag.BoolVar(&testConfig, "t", false, "test configuration and exit")
+	flag.BoolVar(&exitWithParent, "exit-with-parent", false, "shut down when the parent process is gone, restoring routes and listeners")
 	flag.Parse()
 }
 
-// stopSign is closed when the Windows service manager asks the core to stop; see main_windows.go.
+// stopSign is closed when the Windows service manager asks the core to stop (main_windows.go), or
+// the parent that started this core is gone (-exit-with-parent).
 var stopSign = make(chan struct{})
+
+var exitWithParent bool
+
+// watchParent closes stopSign once the parent process is gone: a GUI that crashed or was killed
+// must not leave a core holding the TUN and the system's routes.
+func watchParent() {
+	parent := os.Getppid()
+	for range time.Tick(2 * time.Second) {
+		if os.Getppid() != parent || parent == 1 { // 1: already orphaned before the first look
+			log.Warnln("parent process %d is gone, shutting down", parent)
+			close(stopSign)
+			return
+		}
+	}
+}
 
 func main() {
 	if runAsService() {
@@ -181,6 +199,10 @@ func run() {
 		if err := config.Init(C.Path.HomeDir()); err != nil {
 			log.Fatalln("Initial configuration directory error: %s", err.Error())
 		}
+	}
+
+	if exitWithParent {
+		go watchParent()
 	}
 
 	if testConfig {
