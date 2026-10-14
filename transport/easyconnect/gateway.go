@@ -129,9 +129,9 @@ func (g *Gateway) Login(ctx context.Context, username, password, totpSecret stri
 	}
 	if field("Result", reply.body) != "1" {
 		if m := field("Message", reply.body); m != "" {
-			return refused(m)
+			return loginError(m)
 		}
-		return refused(prefix(reply.body))
+		return errors.New(prefix(reply.body))
 	}
 	if updated := field("TwfID", reply.body); updated != "" {
 		g.twfid = updated
@@ -369,6 +369,18 @@ func (e *RefusedError) Error() string { return e.Msg }
 
 func refused(msg string) error { return &RefusedError{Msg: msg} }
 
+// loginError is a gateway's reason for turning a login down. Wrong credentials won't fix
+// themselves, so those are refused for good; anything else (a stale one-time code, a limit) is
+// an ordinary error, retried after the usual wait.
+func loginError(msg string) error {
+	for _, word := range []string{"password", "passwd", "user", "密码", "用户", "账号", "帐号", "locked", "锁定", "expired", "过期"} {
+		if strings.Contains(strings.ToLower(msg), word) {
+			return refused(msg)
+		}
+	}
+	return errors.New(msg)
+}
+
 func unsupported(what string) error {
 	return refused(fmt.Sprintf("the gateway asks for %s, which is not supported", what))
 }
@@ -386,7 +398,11 @@ func field(tag, text string) string {
 	if end < 0 {
 		return ""
 	}
-	return text[start : start+end]
+	v := strings.TrimSpace(text[start : start+end])
+	if inner, ok := strings.CutPrefix(v, "<![CDATA["); ok { // some gateways wrap values, "<![CDATA[incorrect svpn_req_randcode]]>"
+		v = strings.TrimSuffix(inner, "]]>")
+	}
+	return v
 }
 
 func prefix(text string) string {

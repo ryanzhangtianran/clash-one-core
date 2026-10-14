@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/rc4"
 	"crypto/sha1"
+	"errors"
 	"net"
 	"net/netip"
 	"os"
@@ -153,4 +154,14 @@ func TestLiveTLS(t *testing.T) {
 		t.Error("no session ID")
 	}
 	t.Logf("version %04x, session ID %x", c.version, c.sessionID)
+}
+
+func TestFieldsLoseTheirCDATAAndOnlyCredentialErrorsAreRefused(t *testing.T) {
+	if got := field("Message", "<Auth><Message><![CDATA[incorrect svpn_req_randcode]]></Message></Auth>"); got != "incorrect svpn_req_randcode" {
+		t.Errorf("field = %q", got)
+	}
+	var refusedErr *RefusedError
+	if !errors.As(loginError("用户名或密码错误"), &refusedErr) || errors.As(loginError("incorrect svpn_req_randcode"), &refusedErr) {
+		t.Error("loginError classification")
+	}
 }
