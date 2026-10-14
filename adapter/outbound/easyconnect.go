@@ -39,9 +39,13 @@ type EasyConnect struct {
 	stack      ipStack
 	resolver   resolver.Resolver
 	connecting bool
-	done       chan struct{} // closed when the login in progress ends
-	lastError  error
-	lastTry    time.Time
+	// successor is the outbound a reload replaced this one with while its login was running; the
+	// login's result goes to it, so a reload during startup doesn't log in twice (the gateway allows
+	// one session per account) nor abandon a session.
+	successor *EasyConnect
+	done      chan struct{} // closed when the login in progress ends
+	lastError error
+	lastTry   time.Time
 }
 
 type EasyConnectOption struct {
@@ -158,15 +162,50 @@ func (e *EasyConnect) handOver(to *EasyConnect) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.closed = true
-	if e.session != nil && e.session.Failed() == nil && e.option.key() == to.option.key() {
+	same := e.option.key() == to.option.key()
+	switch {
+	case same && e.session != nil && e.session.Failed() == nil:
 		to.mu.Lock()
 		to.session, to.stack = e.session, e.stack
 		to.resolver = to.newResolver(e.session.Routing.DNS)
 		to.mu.Unlock()
 		e.session, e.stack, e.resolver = nil, nil, nil
 		return
+	case same && e.connecting:
+		to.mu.Lock()
+		to.connecting, to.done = true, e.done // dials on the successor wait for this login
+		to.mu.Unlock()
+		e.successor = to
+		return
 	}
 	e.teardown()
+}
+
+var errClosed = E.New("closed")
+
+// adopt gives a login's result to the successor a reload installed meanwhile (or its successor).
+func (e *EasyConnect) adopt(session *easyconnect.Session, stack ipStack, err error) {
+	s := e.successor
+	for {
+		s.mu.Lock()
+		if s.closed && s.successor != nil {
+			next := s.successor
+			s.mu.Unlock()
+			s = next
+			continue
+		}
+		s.connecting = false
+		s.lastTry, s.lastError = time.Now(), err
+		if err == nil && !s.closed {
+			s.session, s.stack = session, stack
+			s.resolver = s.newResolver(session.Routing.DNS)
+		} else if err == nil {
+			session.Close()
+			_ = stack.Close()
+		}
+		s.mu.Unlock()
+		return
+	}
 }
 
 // kick starts a login in the background unless one is running, the tunnel is
@@ -179,7 +218,7 @@ func (e *EasyConnect) kick() {
 		return
 	}
 	go func() {
-		if _, _, err := e.connect(context.Background()); err != nil {
+		if _, _, err := e.connect(context.Background()); err != nil && !errors.Is(err, errClosed) {
 			log.Warnln("[EasyConnect](%s) %s", e.Name(), err)
 		}
 	}()
@@ -206,7 +245,7 @@ func (e *EasyConnect) connect(ctx context.Context) (ipStack, resolver.Resolver, 
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
-		return nil, nil, E.New("closed")
+		return nil, nil, errClosed
 	}
 	if e.session != nil {
 		if err := e.session.Failed(); err == nil {
@@ -242,15 +281,19 @@ func (e *EasyConnect) connect(ctx context.Context) (ipStack, resolver.Resolver, 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.connecting = false
-	close(e.done)
+	defer close(e.done) // after the successor has the result, so a waiting dial sees it
 	e.lastTry, e.lastError = time.Now(), err
+	if e.closed && e.successor != nil {
+		e.adopt(session, stack, err)
+		return nil, nil, errClosed
+	}
 	if err != nil {
 		return nil, nil, err
 	}
 	if e.closed {
 		session.Close()
 		_ = stack.Close()
-		return nil, nil, E.New("closed")
+		return nil, nil, errClosed
 	}
 	e.session, e.stack = session, stack
 	e.resolver = e.newResolver(session.Routing.DNS)
