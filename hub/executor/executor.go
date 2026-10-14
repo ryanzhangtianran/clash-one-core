@@ -583,6 +583,7 @@ func updateIPTables(cfg *config.Config) {
 func Shutdown() {
 	listener.Cleanup()
 	reverse.Patch(nil)
+	outbound.ApplyEasyConnects(nil) // logs out of every VPN gateway, so the account is free for the next start
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()
 
