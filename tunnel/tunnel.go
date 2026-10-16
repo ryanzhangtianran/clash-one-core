@@ -436,6 +436,7 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 						metadata.ProcessPath = path
 						metadata.Uid = uid
 						metadata.Pid = pid
+						metadata.ProcessAncestors, _ = process.Ancestors(pid) // pid 0 (unknown) yields none
 
 						if pkg, err := process.FindPackageName(metadata); err == nil { // for android (not CMFA) package names
 							metadata.Process = pkg

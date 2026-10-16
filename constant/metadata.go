@@ -224,6 +224,10 @@ type Metadata struct {
 	RemoteDst    string     `json:"remoteDestination"`
 	DSCP         uint8      `json:"dscp"`
 
+	// the executables of the process's ancestors, nearest first, read when the connection opened:
+	// a short-lived command's chain is gone by the time a client could look it up
+	ProcessAncestors []string `json:"processAncestors,omitempty"`
+
 	RawSrcAddr net.Addr `json:"-"`
 	RawDstAddr net.Addr `json:"-"`
 	// Only domain rule
